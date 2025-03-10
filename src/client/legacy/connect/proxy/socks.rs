@@ -13,9 +13,19 @@ use pin_project_lite::pin_project;
 /// Tunnel Proxy via SOCKS 5 CONNECT
 #[derive(Debug)]
 pub struct Socks<C> {
+    optimistic: bool,
     auth: Option<(String, String)>,
     inner: C,
     proxy_dst: Uri,
+}
+
+enum State {
+    SendingNegReq,
+    ReadingNegRes,
+    SendingAuthReq,
+    ReadingAuthRes,
+    SendingProxyReq,
+    ReadingProxyRes,
 }
 
 #[derive(Debug)]
@@ -58,12 +68,23 @@ impl<C> Socks<C> {
             auth: None,
             inner: connector,
             proxy_dst,
+            optimistic: false,
         }
     }
 
     /// Use User/Pass authentication method during handshake
     pub fn with_auth(mut self, user: String, pass: String) -> Self {
         self.auth = Some((user, pass));
+        self
+    }
+
+    /// Send all messages of the handshake immediately, without waiting for a response.
+    ///
+    /// Can reduce the RTT of the handshake but is not explicitly defined in the RFC
+    /// and may not work with with all proxy servers. Test your proxy is working
+    /// without this option, before attempting to use this option.
+    pub fn send_optimistically(mut self, bool: bool) -> Self {
+        self.optimistic = bool;
         self
     }
 }
@@ -86,6 +107,7 @@ where
     fn call(&mut self, dst: Uri) -> Self::Future {
         let conn = self.inner.call(self.proxy_dst.clone());
         let auth = self.auth.clone();
+        let optimistic = self.optimistic;
 
         Handshaking {
             fut: Box::pin(async move {
@@ -94,6 +116,7 @@ where
                     dst.host().ok_or(SocksError::MissingHost)?.to_string(),
                     dst.port().ok_or(SocksError::MissingPort)?.as_u16(),
                     auth,
+                    optimistic,
                 )
                 .await
             }),
@@ -119,6 +142,7 @@ async fn handshake<T, E>(
     host: String,
     port: u16,
     auth: Option<(String, String)>,
+    optimistic: bool,
 ) -> Result<T, SocksError<E>>
 where
     T: Read + Write + Unpin,
@@ -138,50 +162,97 @@ where
 
     let mut buf: [u8; 513] = [0; 513];
 
-    // Write message
-    let req = NegotiationReq(method);
-    let n = req.write_to_buf(&mut buf[..])?;
-    crate::rt::write_all(&mut conn, &buf[..n]).await?;
+    let mut state = State::SendingNegReq;
 
-    // Read response
-    let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
+    loop {
+        match state {
+            State::SendingNegReq => {
+                let req = NegotiationReq(&method);
+                let n = req.write_to_buf(&mut buf[..])?;
+                crate::rt::write_all(&mut conn, &buf[..n]).await?;
 
-    if res.0 == AuthMethod::NoneAcceptable {
-        return Err(AuthError::Unsupported.into());
-    }
+                if optimistic {
+                    if method == AuthMethod::UserPass {
+                        state = State::SendingAuthReq;
+                    } else {
+                        state = State::SendingProxyReq;
+                    }
+                } else {
+                    state = State::ReadingNegRes;
+                }
+            }
 
-    if res.0 != method {
-        return Err(AuthError::MethodMismatch.into());
-    }
+            State::ReadingNegRes => {
+                let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
 
-    // Optional authentication flow
-    if res.0 == AuthMethod::UserPass {
-        // Write message
-        let (user, pass) = auth.unwrap();
-        let req = AuthenticationReq(&user, &pass);
-        let n = req.write_to_buf(&mut buf[..])?;
-        crate::rt::write_all(&mut conn, &buf[..n]).await?;
+                if res.0 == AuthMethod::NoneAcceptable {
+                    return Err(AuthError::Unsupported.into());
+                }
 
-        // Read response
-        let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
+                if res.0 != method {
+                    return Err(AuthError::MethodMismatch.into());
+                }
 
-        if !res.0 {
-            return Err(AuthError::Failed.into());
+                if optimistic {
+                    if res.0 == AuthMethod::UserPass {
+                        state = State::ReadingAuthRes;
+                    } else {
+                        state = State::ReadingProxyRes;
+                    }
+                } else {
+                    if res.0 == AuthMethod::UserPass {
+                        state = State::SendingAuthReq;
+                    } else {
+                        state = State::SendingProxyReq;
+                    }
+                }
+            }
+
+            State::SendingAuthReq => {
+                let (user, pass) = auth.as_ref().unwrap();
+                let req = AuthenticationReq(&user, &pass);
+                let n = req.write_to_buf(&mut buf[..])?;
+                crate::rt::write_all(&mut conn, &buf[..n]).await?;
+
+                if optimistic {
+                    state = State::SendingProxyReq;
+                } else {
+                    state = State::ReadingAuthRes;
+                }
+            }
+
+            State::ReadingAuthRes => {
+                let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
+
+                if !res.0 {
+                    return Err(AuthError::Failed.into());
+                }
+
+                state = State::SendingProxyReq;
+            }
+
+            State::SendingProxyReq => {
+                let req = ProxyReq(&address);
+                let n = req.write_to_buf(&mut buf[..])?;
+                crate::rt::write_all(&mut conn, &buf[..n]).await?;
+
+                if optimistic {
+                    state = State::ReadingNegRes;
+                } else {
+                    state = State::ReadingProxyRes;
+                }
+            }
+
+            State::ReadingProxyRes => {
+                let res: ProxyRes = read_message(&mut conn, &mut buf).await?;
+
+                if res.0 == Status::Success {
+                    return Ok(conn);
+                } else {
+                    return Err(res.0.into());
+                }
+            }
         }
-    }
-
-    // Send proxy request
-    let req = ProxyReq(address);
-    let n = req.write_to_buf(&mut buf[..])?;
-    crate::rt::write_all(&mut conn, &buf[..n]).await?;
-
-    // Read proxy status
-    let res: ProxyRes = read_message(&mut conn, &mut buf).await?;
-
-    if res.0 == Status::Success {
-        Ok(conn)
-    } else {
-        Err(res.0.into())
     }
 }
 
@@ -215,7 +286,7 @@ mod messages {
     use super::*;
 
     #[derive(Debug)]
-    pub struct NegotiationReq(pub AuthMethod);
+    pub struct NegotiationReq<'a>(pub &'a AuthMethod);
     #[derive(Debug)]
     pub struct NegotiationRes(pub AuthMethod);
 
@@ -225,7 +296,7 @@ mod messages {
     pub struct AuthenticationRes(pub bool);
 
     #[derive(Debug)]
-    pub struct ProxyReq(pub Address);
+    pub struct ProxyReq<'a>(pub &'a Address);
     #[derive(Debug)]
     pub struct ProxyRes(pub Status);
 
@@ -244,17 +315,18 @@ mod messages {
         Domain(String, u16),
     }
 
+    #[repr(u8)]
     #[derive(Debug, Copy, Clone, PartialEq)]
     pub enum Status {
-        Success,
-        GeneralServerFailure,
-        ConnectionNotAllowed,
-        NetworkUnreachable,
-        HostUnreachable,
-        ConnectionRefused,
-        TtlExpired,
-        CommandNotSupported,
-        AddressTypeNotSupported,
+        Success = 0x00,
+        GeneralServerFailure = 0x01,
+        ConnectionNotAllowed = 0x02,
+        NetworkUnreachable = 0x03,
+        HostUnreachable = 0x04,
+        ConnectionRefused = 0x05,
+        TtlExpired = 0x06,
+        CommandNotSupported = 0x07,
+        AddressTypeNotSupported = 0x08,
     }
 
     #[derive(Debug)]
@@ -282,15 +354,9 @@ mod messages {
         }
     }
 
-    impl From<NegotiationReq> for [u8; 3] {
-        fn from(req: NegotiationReq) -> Self {
-            [0x05, 0x01, req.0 as u8]
-        }
-    }
-
     use bytes::{Buf, BufMut};
 
-    impl NegotiationReq {
+    impl NegotiationReq<'_> {
         ///  +----+----------+----------+
         /// |VER | NMETHODS | METHODS  |
         /// +----+----------+----------+
@@ -303,7 +369,7 @@ mod messages {
 
             buf.put_u8(0x05); // Version
             buf.put_u8(0x01); // Number of authentication methods
-            buf.put_u8(self.0 as u8); // Authentication method
+            buf.put_u8(*self.0 as u8); // Authentication method
 
             Ok(3)
         }
@@ -383,7 +449,7 @@ mod messages {
         }
     }
 
-    impl ProxyReq {
+    impl ProxyReq<'_> {
         /// +----+-----+-------+------+----------+----------+
         /// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
         /// +----+-----+-------+------+----------+----------+
