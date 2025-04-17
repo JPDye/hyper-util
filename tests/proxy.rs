@@ -50,7 +50,7 @@ async fn test_socks_without_auth_works() {
     let target_addr = target_tcp.local_addr().expect("local_addr");
     let target_dst = format!("http://{}", target_addr).parse().expect("uri");
 
-    let mut connector = Socks::new(proxy_dst, HttpConnector::new());
+    let mut connector = Socks::<HttpConnector>::builder(proxy_dst).build(HttpConnector::new());
 
     // Client
     //
@@ -133,8 +133,9 @@ async fn test_socks_with_auth_works() {
     let target_addr = target_tcp.local_addr().expect("local_addr");
     let target_dst = format!("http://{}", target_addr).parse().expect("uri");
 
-    let mut connector =
-        Socks::new(proxy_dst, HttpConnector::new()).with_auth("user".into(), "pass".into());
+    let mut connector = Socks::<HttpConnector>::builder(proxy_dst)
+        .with_auth("user".into(), "pass".into())
+        .build(HttpConnector::new());
 
     // Client
     //
@@ -222,8 +223,9 @@ async fn test_socks_with_domain_works() {
     let proxy_addr = proxy_tcp.local_addr().expect("local_addr");
     let proxy_addr = format!("http://{}", proxy_addr).parse().expect("uri");
 
-    let mut connector =
-        Socks::new(proxy_addr, HttpConnector::new()).with_auth("user".into(), "pass".into());
+    let mut connector = Socks::<HttpConnector>::builder(proxy_addr)
+        .with_auth("user".into(), "pass".into())
+        .build(HttpConnector::new());
 
     // Client
     //

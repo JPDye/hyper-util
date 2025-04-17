@@ -1,5 +1,4 @@
 //! Proxy helpers
-
 mod socks;
 mod tunnel;
 
