@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 use http::Uri;
 use hyper::rt::{Read, Write};
@@ -43,6 +43,7 @@ pub enum SocksError<C> {
     Inner(C),
     Io(std::io::Error),
 
+    DnsFailure,
     MissingHost,
     MissingPort,
     HostTooLong,
@@ -129,11 +130,126 @@ impl SocksConfig {
         }
     }
 
-    async fn execute<T, E>(self, conn: T, host: String, port: u16) -> Result<T, SocksError<E>>
+    async fn execute<T, E>(self, mut conn: T, host: String, port: u16) -> Result<T, SocksError<E>>
     where
         T: Read + Write + Unpin,
     {
-        todo!()
+        let address = match host.parse::<IpAddr>() {
+            Ok(ip) => Address::Socket(SocketAddr::new(ip, port)),
+            Err(_) if host.len() <= 255 => {
+                if !self.local_dns {
+                    Address::Domain(host, port)
+                } else {
+                    let socket = (host, port)
+                        .to_socket_addrs()?
+                        .next()
+                        .ok_or(SocksError::DnsFailure)?;
+
+                    Address::Socket(socket)
+                }
+            }
+            Err(_) => return Err(SocksError::HostTooLong),
+        };
+
+        let method = if self.proxy_auth.is_some() {
+            AuthMethod::UserPass
+        } else {
+            AuthMethod::NoAuth
+        };
+
+        let mut buf: [u8; 513] = [0; 513];
+        let mut state = State::SendingNegReq;
+
+        loop {
+            match state {
+                State::SendingNegReq => {
+                    let req = NegotiationReq(&method);
+                    let n = req.write_to_buf(&mut buf[..])?;
+                    crate::rt::write_all(&mut conn, &buf[..n]).await?;
+
+                    if self.optimistic {
+                        if method == AuthMethod::UserPass {
+                            state = State::SendingAuthReq;
+                        } else {
+                            state = State::SendingProxyReq;
+                        }
+                    } else {
+                        state = State::ReadingNegRes;
+                    }
+                }
+
+                State::ReadingNegRes => {
+                    let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
+
+                    if res.0 == AuthMethod::NoneAcceptable {
+                        return Err(AuthError::Unsupported.into());
+                    }
+
+                    if res.0 != method {
+                        return Err(AuthError::MethodMismatch.into());
+                    }
+
+                    if self.optimistic {
+                        if res.0 == AuthMethod::UserPass {
+                            state = State::ReadingAuthRes;
+                        } else {
+                            state = State::ReadingProxyRes;
+                        }
+                    } else {
+                        if res.0 == AuthMethod::UserPass {
+                            state = State::SendingAuthReq;
+                        } else {
+                            state = State::SendingProxyReq;
+                        }
+                    }
+                }
+
+                State::SendingAuthReq => {
+                    let (user, pass) = self.proxy_auth.as_ref().unwrap();
+                    let req = AuthenticationReq(&user, &pass);
+                    let n = req.write_to_buf(&mut buf[..])?;
+                    crate::rt::write_all(&mut conn, &buf[..n]).await?;
+
+                    if self.optimistic {
+                        state = State::SendingProxyReq;
+                    } else {
+                        state = State::ReadingAuthRes;
+                    }
+                }
+
+                State::ReadingAuthRes => {
+                    let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
+
+                    if !res.0 {
+                        return Err(AuthError::Failed.into());
+                    }
+
+                    state = State::SendingProxyReq;
+                }
+
+                State::SendingProxyReq => {
+                    let req = ProxyReq(&address);
+                    let n = req.write_to_buf(&mut buf[..])?;
+                    crate::rt::write_all(&mut conn, &buf[..n]).await?;
+
+                    if self.optimistic {
+                        state = State::ReadingNegRes;
+                    } else {
+                        state = State::ReadingProxyRes;
+                    }
+                }
+
+                State::ReadingProxyRes => {
+                    let res: ProxyRes = read_message(&mut conn, &mut buf).await?;
+
+                    if res.0 == Status::Success {
+                        return Ok(conn);
+                    } else {
+                        return Err(res.0.into());
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -185,124 +301,6 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)
-    }
-}
-
-async fn handshake<T, E>(
-    mut conn: T,
-    host: String,
-    port: u16,
-    auth: Option<(String, String)>,
-    optimistic: bool,
-) -> Result<T, SocksError<E>>
-where
-    T: Read + Write + Unpin,
-{
-    let address = match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(v4)) => Address::V4(v4, port),
-        Ok(IpAddr::V6(v6)) => Address::V6(v6, port),
-        Err(_) if host.len() <= 255 => Address::Domain(host, port),
-        Err(_) => return Err(SocksError::HostTooLong),
-    };
-
-    let method = if auth.is_some() {
-        AuthMethod::UserPass
-    } else {
-        AuthMethod::NoAuth
-    };
-
-    let mut buf: [u8; 513] = [0; 513];
-    let mut state = State::SendingNegReq;
-
-    loop {
-        match state {
-            State::SendingNegReq => {
-                let req = NegotiationReq(&method);
-                let n = req.write_to_buf(&mut buf[..])?;
-                crate::rt::write_all(&mut conn, &buf[..n]).await?;
-
-                if optimistic {
-                    if method == AuthMethod::UserPass {
-                        state = State::SendingAuthReq;
-                    } else {
-                        state = State::SendingProxyReq;
-                    }
-                } else {
-                    state = State::ReadingNegRes;
-                }
-            }
-
-            State::ReadingNegRes => {
-                let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
-
-                if res.0 == AuthMethod::NoneAcceptable {
-                    return Err(AuthError::Unsupported.into());
-                }
-
-                if res.0 != method {
-                    return Err(AuthError::MethodMismatch.into());
-                }
-
-                if optimistic {
-                    if res.0 == AuthMethod::UserPass {
-                        state = State::ReadingAuthRes;
-                    } else {
-                        state = State::ReadingProxyRes;
-                    }
-                } else {
-                    if res.0 == AuthMethod::UserPass {
-                        state = State::SendingAuthReq;
-                    } else {
-                        state = State::SendingProxyReq;
-                    }
-                }
-            }
-
-            State::SendingAuthReq => {
-                let (user, pass) = auth.as_ref().unwrap();
-                let req = AuthenticationReq(&user, &pass);
-                let n = req.write_to_buf(&mut buf[..])?;
-                crate::rt::write_all(&mut conn, &buf[..n]).await?;
-
-                if optimistic {
-                    state = State::SendingProxyReq;
-                } else {
-                    state = State::ReadingAuthRes;
-                }
-            }
-
-            State::ReadingAuthRes => {
-                let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
-
-                if !res.0 {
-                    return Err(AuthError::Failed.into());
-                }
-
-                state = State::SendingProxyReq;
-            }
-
-            State::SendingProxyReq => {
-                let req = ProxyReq(&address);
-                let n = req.write_to_buf(&mut buf[..])?;
-                crate::rt::write_all(&mut conn, &buf[..n]).await?;
-
-                if optimistic {
-                    state = State::ReadingNegRes;
-                } else {
-                    state = State::ReadingProxyRes;
-                }
-            }
-
-            State::ReadingProxyRes => {
-                let res: ProxyRes = read_message(&mut conn, &mut buf).await?;
-
-                if res.0 == Status::Success {
-                    return Ok(conn);
-                } else {
-                    return Err(res.0.into());
-                }
-            }
-        }
     }
 }
 

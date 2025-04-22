@@ -1,4 +1,6 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::SocketAddr;
+
+use bytes::{Buf, BufMut};
 
 #[derive(Debug)]
 pub struct NegotiationReq<'a>(pub &'a AuthMethod);
@@ -25,8 +27,7 @@ pub enum AuthMethod {
 
 #[derive(Debug)]
 pub enum Address {
-    V4(Ipv4Addr, u16),
-    V6(Ipv6Addr, u16),
+    Socket(SocketAddr),
     Domain(String, u16),
 }
 
@@ -54,23 +55,6 @@ pub enum ParsingError {
 pub enum SerializeError {
     WouldOverflow,
 }
-
-impl TryFrom<u8> for AuthMethod {
-    type Error = ParsingError;
-
-    fn try_from(byte: u8) -> Result<Self, Self::Error> {
-        Ok(match byte {
-            0x00 => Self::NoAuth,
-            0x02 => Self::UserPass,
-            0xFF => Self::NoneAcceptable,
-
-            _ => return Err(ParsingError::Other),
-        })
-    }
-}
-
-use bytes::{Buf, BufMut};
-
 impl NegotiationReq<'_> {
     ///  +----+----------+----------+
     /// |VER | NMETHODS | METHODS  |
@@ -172,8 +156,8 @@ impl ProxyReq<'_> {
     /// +----+-----+-------+------+----------+----------+
     pub fn write_to_buf<B: BufMut>(&self, mut buf: B) -> Result<usize, SerializeError> {
         let addr_len = match self.0 {
-            Address::V4(_, _) => 1 + 4 + 2,
-            Address::V6(_, _) => 1 + 16 + 2,
+            Address::Socket(SocketAddr::V4(_)) => 1 + 4 + 2,
+            Address::Socket(SocketAddr::V6(_)) => 1 + 16 + 2,
             Address::Domain(ref domain, _) => 1 + 1 + domain.len() + 2,
         };
 
@@ -226,26 +210,26 @@ impl TryFrom<&[u8]> for ProxyRes {
 impl Address {
     pub fn write_to_buf<B: BufMut>(&self, mut buf: B) -> Result<usize, SerializeError> {
         match self {
-            Self::V4(ip, port) => {
+            Self::Socket(SocketAddr::V4(v4)) => {
                 if buf.remaining_mut() < 1 + 4 + 2 {
                     return Err(SerializeError::WouldOverflow);
                 }
 
                 buf.put_u8(0x01);
-                buf.put_slice(&ip.octets());
-                buf.put_u16(*port); // Network Order/BigEndian for port
+                buf.put_slice(&v4.ip().octets());
+                buf.put_u16(v4.port()); // Network Order/BigEndian for port
 
                 Ok(7)
             }
 
-            Self::V6(ip, port) => {
+            Self::Socket(SocketAddr::V6(v6)) => {
                 if buf.remaining_mut() < 1 + 16 + 2 {
                     return Err(SerializeError::WouldOverflow);
                 }
 
                 buf.put_u8(0x04);
-                buf.put_slice(&ip.octets());
-                buf.put_u16(*port); // Network Order/BigEndian for port
+                buf.put_slice(&v6.ip().octets());
+                buf.put_u16(v6.port()); // Network Order/BigEndian for port
 
                 Ok(19)
             }
@@ -287,7 +271,7 @@ impl TryFrom<&[u8]> for Address {
                 buf.copy_to_slice(&mut ip);
                 let port = buf.get_u16();
 
-                Self::V4(ip.into(), port)
+                Self::Socket(SocketAddr::new(ip.into(), port))
             }
 
             0x03 => {
@@ -317,7 +301,7 @@ impl TryFrom<&[u8]> for Address {
                 buf.copy_to_slice(&mut ip);
                 let port = buf.get_u16();
 
-                Self::V6(ip.into(), port)
+                Self::Socket(SocketAddr::new(ip.into(), port))
             }
 
             _ => return Err(ParsingError::Other),
@@ -340,6 +324,20 @@ impl TryFrom<u8> for Status {
             0x06 => Status::TtlExpired,
             0x07 => Status::CommandNotSupported,
             0x08 => Status::AddressTypeNotSupported,
+            _ => return Err(ParsingError::Other),
+        })
+    }
+}
+
+impl TryFrom<u8> for AuthMethod {
+    type Error = ParsingError;
+
+    fn try_from(byte: u8) -> Result<Self, Self::Error> {
+        Ok(match byte {
+            0x00 => Self::NoAuth,
+            0x02 => Self::UserPass,
+            0xFF => Self::NoneAcceptable,
+
             _ => return Err(ParsingError::Other),
         })
     }
