@@ -15,7 +15,7 @@ use pin_project_lite::pin_project;
 
 /// Tunnel Proxy via SOCKS 5 CONNECT
 #[derive(Debug)]
-pub struct Socks<C> {
+pub struct SocksV5<C> {
     inner: C,
     config: SocksConfig,
 }
@@ -79,7 +79,7 @@ pin_project! {
 
 type BoxHandshaking<T, E> = Pin<Box<dyn Future<Output = Result<T, SocksError<E>>> + Send>>;
 
-impl<C> Socks<C> {
+impl<C> SocksV5<C> {
     /// Create a new SOCKSv5 handshake service.
     ///
     /// Wraps an underlying connector and stores the address of a tunneling
@@ -264,7 +264,7 @@ impl SocksConfig {
     }
 }
 
-impl<C> Service<Uri> for Socks<C>
+impl<C> Service<Uri> for SocksV5<C>
 where
     C: Service<Uri>,
     C::Future: Send + 'static,

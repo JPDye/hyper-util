@@ -2,10 +2,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower_service::Service;
 
-use hyper_util::client::legacy::connect::{
-    proxy::{Socks, Tunnel},
-    HttpConnector,
-};
+use hyper_util::client::legacy::connect::proxy::{SocksV5, Tunnel};
+use hyper_util::client::legacy::connect::HttpConnector;
 
 #[cfg(not(miri))]
 #[tokio::test]
@@ -41,7 +39,7 @@ async fn test_tunnel_works() {
 
 #[cfg(not(miri))]
 #[tokio::test]
-async fn test_socks_without_auth_works() {
+async fn test_socks_v5_without_auth_works() {
     let proxy_tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let proxy_addr = proxy_tcp.local_addr().expect("local_addr");
     let proxy_dst = format!("http://{}", proxy_addr).parse().expect("uri");
@@ -50,7 +48,7 @@ async fn test_socks_without_auth_works() {
     let target_addr = target_tcp.local_addr().expect("local_addr");
     let target_dst = format!("http://{}", target_addr).parse().expect("uri");
 
-    let mut connector = Socks::new(proxy_dst, HttpConnector::new());
+    let mut connector = SocksV5::new(proxy_dst, HttpConnector::new());
 
     // Client
     //
@@ -124,7 +122,7 @@ async fn test_socks_without_auth_works() {
 
 #[cfg(not(miri))]
 #[tokio::test]
-async fn test_socks_with_auth_works() {
+async fn test_socks_v5_with_auth_works() {
     let proxy_tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let proxy_addr = proxy_tcp.local_addr().expect("local_addr");
     let proxy_dst = format!("http://{}", proxy_addr).parse().expect("uri");
@@ -134,7 +132,7 @@ async fn test_socks_with_auth_works() {
     let target_dst = format!("http://{}", target_addr).parse().expect("uri");
 
     let mut connector =
-        Socks::new(proxy_dst, HttpConnector::new()).with_auth("user".into(), "pass".into());
+        SocksV5::new(proxy_dst, HttpConnector::new()).with_auth("user".into(), "pass".into());
 
     // Client
     //
@@ -217,12 +215,12 @@ async fn test_socks_with_auth_works() {
 
 #[cfg(not(miri))]
 #[tokio::test]
-async fn test_socks_with_server_resolved_domain_works() {
+async fn test_socks_v5_with_server_resolved_domain_works() {
     let proxy_tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let proxy_addr = proxy_tcp.local_addr().expect("local_addr");
     let proxy_addr = format!("http://{}", proxy_addr).parse().expect("uri");
 
-    let mut connector = Socks::new(proxy_addr, HttpConnector::new())
+    let mut connector = SocksV5::new(proxy_addr, HttpConnector::new())
         .with_auth("user".into(), "pass".into())
         .local_dns(false);
 
@@ -283,12 +281,12 @@ async fn test_socks_with_server_resolved_domain_works() {
 
 #[cfg(not(miri))]
 #[tokio::test]
-async fn test_socks_with_locally_resolved_domain_works() {
+async fn test_socks_v5_with_locally_resolved_domain_works() {
     let proxy_tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let proxy_addr = proxy_tcp.local_addr().expect("local_addr");
     let proxy_addr = format!("http://{}", proxy_addr).parse().expect("uri");
 
-    let mut connector = Socks::new(proxy_addr, HttpConnector::new())
+    let mut connector = SocksV5::new(proxy_addr, HttpConnector::new())
         .with_auth("user".into(), "pass".into())
         .local_dns(true);
 
