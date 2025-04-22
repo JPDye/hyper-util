@@ -79,14 +79,20 @@ pin_project! {
 
 type BoxHandshaking<T, E> = Pin<Box<dyn Future<Output = Result<T, SocksError<E>>> + Send>>;
 
-impl SocksConfig {
-    pub fn new(proxy: Uri) -> Self {
-        Self {
-            proxy,
-            proxy_auth: None,
+impl<C> Socks<C> {
+    /// Create a new SOCKSv5 handshake service.
+    ///
+    /// Wraps an underlying connector and stores the address of a tunneling
+    /// proxying servier.
+    ///
+    /// A `SocksV5` can then be called with any destination. The `dst` passed to
+    /// `call` will not be used to create the underlying connection, but will
+    /// be used in an HTTP CONNECT request sent to the proxy destination.
 
-            local_dns: false,
-            optimistic: false,
+    pub fn new(proxy_dst: Uri, connector: C) -> Self {
+        Self {
+            inner: connector,
+            config: SocksConfig::new(proxy_dst),
         }
     }
 
@@ -96,7 +102,7 @@ impl SocksConfig {
     /// 0 length strings are allowed despite RFC prohibiting it. This is done so that
     /// for compatablity with server implementations that require it for IP authentication.
     pub fn with_auth(mut self, user: String, pass: String) -> Self {
-        self.proxy_auth = Some((user, pass));
+        self.config.proxy_auth = Some((user, pass));
         self
     }
 
@@ -105,7 +111,7 @@ impl SocksConfig {
     /// Disabled by default as local resolution of domain names can be detected as a
     /// DNS leak.
     pub fn local_dns(mut self, local_dns: bool) -> Self {
-        self.local_dns = local_dns;
+        self.config.local_dns = local_dns;
         self
     }
 
@@ -119,14 +125,19 @@ impl SocksConfig {
     /// Recommended to ensure connector works correctly without optimistic sending before trying
     /// with optimistic sending.
     pub fn send_optimistically(mut self, optimistic: bool) -> Self {
-        self.optimistic = optimistic;
+        self.config.optimistic = optimistic;
         self
     }
+}
 
-    pub fn build<C>(self, connector: C) -> Socks<C> {
-        Socks {
-            inner: connector,
-            config: self,
+impl SocksConfig {
+    fn new(proxy: Uri) -> Self {
+        Self {
+            proxy,
+            proxy_auth: None,
+
+            local_dns: false,
+            optimistic: false,
         }
     }
 
@@ -250,13 +261,6 @@ impl SocksConfig {
                 }
             }
         }
-    }
-}
-
-impl<C> Socks<C> {
-    /// Create a new SOCKS CONNECT service
-    pub fn builder(proxy: Uri) -> SocksConfig {
-        SocksConfig::new(proxy)
     }
 }
 
