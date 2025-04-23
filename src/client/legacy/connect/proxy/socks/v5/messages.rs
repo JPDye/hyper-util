@@ -1,4 +1,4 @@
-use super::{ParsingError, SerializeError};
+use super::super::{ParsingError, SerializeError};
 
 use bytes::{Buf, BufMut};
 use std::net::SocketAddr;

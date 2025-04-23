@@ -1,5 +1,5 @@
 mod errors;
-use errors::*;
+pub use errors::*;
 
 mod messages;
 use messages::*;
@@ -56,7 +56,7 @@ pin_project! {
     }
 }
 
-type BoxHandshaking<T, E> = Pin<Box<dyn Future<Output = Result<T, SocksError<E>>> + Send>>;
+type BoxHandshaking<T, E> = Pin<Box<dyn Future<Output = Result<T, super::SocksError<E>>> + Send>>;
 
 impl<C> SocksV5<C> {
     /// Create a new SOCKSv5 handshake service.
@@ -67,7 +67,6 @@ impl<C> SocksV5<C> {
     /// A `SocksV5` can then be called with any destination. The `dst` passed to
     /// `call` will not be used to create the underlying connection, but will
     /// be used in an HTTP CONNECT request sent to the proxy destination.
-
     pub fn new(proxy_dst: Uri, connector: C) -> Self {
         Self {
             inner: connector,
@@ -120,7 +119,12 @@ impl SocksConfig {
         }
     }
 
-    async fn execute<T, E>(self, mut conn: T, host: String, port: u16) -> Result<T, SocksError<E>>
+    async fn execute<T, E>(
+        self,
+        mut conn: T,
+        host: String,
+        port: u16,
+    ) -> Result<T, super::SocksError<E>>
     where
         T: Read + Write + Unpin,
     {
@@ -133,12 +137,12 @@ impl SocksConfig {
                     let socket = (host, port)
                         .to_socket_addrs()?
                         .next()
-                        .ok_or(SocksError::DnsFailure)?;
+                        .ok_or(super::SocksError::DnsFailure)?;
 
                     Address::Socket(socket)
                 }
             }
-            Err(_) => return Err(SocksError::HostTooLong),
+            Err(_) => return Err(super::SocksError::HostTooLong),
         };
 
         let method = if self.proxy_auth.is_some() {
@@ -172,11 +176,11 @@ impl SocksConfig {
                     let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
 
                     if res.0 == AuthMethod::NoneAcceptable {
-                        return Err(AuthError::Unsupported.into());
+                        return Err(super::SocksError::V5(AuthError::Unsupported.into()));
                     }
 
                     if res.0 != method {
-                        return Err(AuthError::MethodMismatch.into());
+                        return Err(super::SocksError::V5(AuthError::MethodMismatch.into()));
                     }
 
                     if self.optimistic {
@@ -211,7 +215,7 @@ impl SocksConfig {
                     let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
 
                     if !res.0 {
-                        return Err(AuthError::Failed.into());
+                        return Err(super::SocksError::V5(AuthError::Failed.into()));
                     }
 
                     state = State::SendingProxyReq;
@@ -235,7 +239,7 @@ impl SocksConfig {
                     if res.0 == Status::Success {
                         return Ok(conn);
                     } else {
-                        return Err(res.0.into());
+                        return Err(super::SocksError::V5(res.0.into()));
                     }
                 }
             }
@@ -251,11 +255,11 @@ where
     C::Error: Send + 'static,
 {
     type Response = C::Response;
-    type Error = SocksError<C::Error>;
+    type Error = super::SocksError<C::Error>;
     type Future = Handshaking<C::Future, C::Response, C::Error>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(SocksError::Inner)
+        self.inner.poll_ready(cx).map_err(super::SocksError::Inner)
     }
 
     fn call(&mut self, dst: Uri) -> Self::Future {
@@ -263,9 +267,12 @@ where
         let connecting = self.inner.call(config.proxy.clone());
 
         let fut = async move {
-            let host = dst.host().ok_or(SocksError::MissingHost)?.to_string();
-            let port = dst.port().ok_or(SocksError::MissingPort)?.as_u16();
-            let conn = connecting.await.map_err(SocksError::Inner)?;
+            let host = dst
+                .host()
+                .ok_or(super::SocksError::MissingHost)?
+                .to_string();
+            let port = dst.port().ok_or(super::SocksError::MissingPort)?.as_u16();
+            let conn = connecting.await.map_err(super::SocksError::Inner)?;
             config.execute(conn, host, port).await
         };
 
@@ -280,17 +287,17 @@ impl<F, T, E> Future for Handshaking<F, T, E>
 where
     F: Future<Output = Result<T, E>>,
 {
-    type Output = Result<T, SocksError<E>>;
+    type Output = Result<T, super::SocksError<E>>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)
     }
 }
 
-async fn read_message<T, M, C>(mut conn: &mut T, buf: &mut [u8]) -> Result<M, SocksError<C>>
+async fn read_message<T, M, C>(mut conn: &mut T, buf: &mut [u8]) -> Result<M, super::SocksError<C>>
 where
     T: Read + Unpin,
-    M: for<'a> TryFrom<&'a [u8], Error = ParsingError>,
+    M: for<'a> TryFrom<&'a [u8], Error = super::ParsingError>,
 {
     let mut n = 0;
     loop {
@@ -304,7 +311,7 @@ where
 
         n += read;
         match M::try_from(&buf[..n]) {
-            Err(ParsingError::Incomplete) => continue,
+            Err(super::ParsingError::Incomplete) => continue,
             Err(err) => return Err(err.into()),
 
             Ok(res) => return Ok(res),
