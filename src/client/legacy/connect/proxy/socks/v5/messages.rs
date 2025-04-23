@@ -1,19 +1,53 @@
-use std::net::SocketAddr;
+use super::{ParsingError, SerializeError};
 
 use bytes::{Buf, BufMut};
+use std::net::SocketAddr;
 
+///  +----+----------+----------+
+/// |VER | NMETHODS | METHODS  |
+/// +----+----------+----------+
+/// | 1  |    1     | 1 to 255 |
+/// +----+----------+----------+
 #[derive(Debug)]
 pub struct NegotiationReq<'a>(pub &'a AuthMethod);
+
+/// +----+--------+
+/// |VER | METHOD |
+/// +----+--------+
+/// | 1  |   1    |
+/// +----+--------+
 #[derive(Debug)]
 pub struct NegotiationRes(pub AuthMethod);
 
+/// +----+------+----------+------+----------+
+/// |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+/// +----+------+----------+------+----------+
+/// | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+/// +----+------+----------+------+----------+
 #[derive(Debug)]
 pub struct AuthenticationReq<'a>(pub &'a str, pub &'a str);
+
+/// +----+--------+
+/// |VER | STATUS |
+/// +----+--------+
+/// | 1  |   1    |
+/// +----+--------+
 #[derive(Debug)]
 pub struct AuthenticationRes(pub bool);
 
+/// +----+-----+-------+------+----------+----------+
+/// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+/// +----+-----+-------+------+----------+----------+
+/// | 1  |  1  | X'00' |  1   | Variable |    2     |
+/// +----+-----+-------+------+----------+----------+
 #[derive(Debug)]
 pub struct ProxyReq<'a>(pub &'a Address);
+
+/// +----+-----+-------+------+----------+----------+
+/// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+/// +----+-----+-------+------+----------+----------+
+/// | 1  |  1  | X'00' |  1   | Variable |    2     |
+/// +----+-----+-------+------+----------+----------+
 #[derive(Debug)]
 pub struct ProxyRes(pub Status);
 
@@ -45,22 +79,7 @@ pub enum Status {
     AddressTypeNotSupported = 0x08,
 }
 
-#[derive(Debug)]
-pub enum ParsingError {
-    Incomplete,
-    Other,
-}
-
-#[derive(Debug)]
-pub enum SerializeError {
-    WouldOverflow,
-}
 impl NegotiationReq<'_> {
-    ///  +----+----------+----------+
-    /// |VER | NMETHODS | METHODS  |
-    /// +----+----------+----------+
-    /// | 1  |    1     | 1 to 255 |
-    /// +----+----------+----------+
     pub fn write_to_buf<B: BufMut>(&self, mut buf: B) -> Result<usize, SerializeError> {
         if buf.remaining_mut() < 3 {
             return Err(SerializeError::WouldOverflow);
@@ -77,11 +96,6 @@ impl NegotiationReq<'_> {
 impl TryFrom<&[u8]> for NegotiationRes {
     type Error = ParsingError;
 
-    /// +----+--------+
-    /// |VER | METHOD |
-    /// +----+--------+
-    /// | 1  |   1    |
-    /// +----+--------+
     fn try_from(mut buf: &[u8]) -> Result<Self, ParsingError> {
         use bytes::Buf;
 
@@ -99,11 +113,6 @@ impl TryFrom<&[u8]> for NegotiationRes {
 }
 
 impl AuthenticationReq<'_> {
-    /// +----+------+----------+------+----------+
-    /// |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
-    /// +----+------+----------+------+----------+
-    /// | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
-    /// +----+------+----------+------+----------+
     pub fn write_to_buf<B: BufMut>(&self, mut buf: B) -> Result<usize, SerializeError> {
         if buf.remaining_mut() < 3 + self.0.len() + self.1.len() {
             return Err(SerializeError::WouldOverflow);
@@ -124,11 +133,6 @@ impl AuthenticationReq<'_> {
 impl TryFrom<&[u8]> for AuthenticationRes {
     type Error = ParsingError;
 
-    /// +----+--------+
-    /// |VER | STATUS |
-    /// +----+--------+
-    /// | 1  |   1    |
-    /// +----+--------+
     fn try_from(mut buf: &[u8]) -> Result<Self, ParsingError> {
         use bytes::Buf;
 
@@ -149,11 +153,6 @@ impl TryFrom<&[u8]> for AuthenticationRes {
 }
 
 impl ProxyReq<'_> {
-    /// +----+-----+-------+------+----------+----------+
-    /// |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
-    /// +----+-----+-------+------+----------+----------+
-    /// | 1  |  1  | X'00' |  1   | Variable |    2     |
-    /// +----+-----+-------+------+----------+----------+
     pub fn write_to_buf<B: BufMut>(&self, mut buf: B) -> Result<usize, SerializeError> {
         let addr_len = match self.0 {
             Address::Socket(SocketAddr::V4(_)) => 1 + 4 + 2,
@@ -177,11 +176,6 @@ impl ProxyReq<'_> {
 impl TryFrom<&[u8]> for ProxyRes {
     type Error = ParsingError;
 
-    /// +----+-----+-------+------+----------+----------+
-    /// |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
-    /// +----+-----+-------+------+----------+----------+
-    /// | 1  |  1  | X'00' |  1   | Variable |    2     |
-    /// +----+-----+-------+------+----------+----------+
     fn try_from(mut buf: &[u8]) -> Result<Self, ParsingError> {
         if buf.remaining() < 2 {
             return Err(ParsingError::Incomplete);
