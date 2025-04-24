@@ -334,7 +334,7 @@ async fn test_socks_v5_with_locally_resolved_domain_works() {
         let message = [0x05, 0x01, 0x00, 0x01, ip1, ip2, ip3, ip4, p1, p2];
         assert_eq!(&buf[..n], message);
 
-        let mut message = vec![0x05, 0x00, 0x00, 0x01, ip1, ip2, ip3, ip4, p1, p2];
+        let message = vec![0x05, 0x00, 0x00, 0x01, ip1, ip2, ip3, ip4, p1, p2];
         to_client.write_all(&message).await.expect("write 3");
     });
 
