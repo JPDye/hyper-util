@@ -97,8 +97,6 @@ impl TryFrom<&[u8]> for NegotiationRes {
     type Error = ParsingError;
 
     fn try_from(mut buf: &[u8]) -> Result<Self, ParsingError> {
-        use bytes::Buf;
-
         if buf.remaining() < 2 {
             return Err(ParsingError::Incomplete);
         }
@@ -134,8 +132,6 @@ impl TryFrom<&[u8]> for AuthenticationRes {
     type Error = ParsingError;
 
     fn try_from(mut buf: &[u8]) -> Result<Self, ParsingError> {
-        use bytes::Buf;
-
         if buf.remaining() < 2 {
             return Err(ParsingError::Incomplete);
         }
@@ -248,8 +244,6 @@ impl TryFrom<&[u8]> for Address {
     type Error = ParsingError;
 
     fn try_from(mut buf: &[u8]) -> Result<Self, Self::Error> {
-        use bytes::Buf;
-
         if buf.remaining() < 2 {
             return Err(ParsingError::Incomplete);
         }
@@ -308,16 +302,16 @@ impl TryFrom<u8> for Status {
 
     fn try_from(byte: u8) -> Result<Self, Self::Error> {
         Ok(match byte {
-            0x00 => Status::Success,
+            0x00 => Self::Success,
 
-            0x01 => Status::GeneralServerFailure,
-            0x02 => Status::ConnectionNotAllowed,
-            0x03 => Status::NetworkUnreachable,
-            0x04 => Status::HostUnreachable,
-            0x05 => Status::ConnectionRefused,
-            0x06 => Status::TtlExpired,
-            0x07 => Status::CommandNotSupported,
-            0x08 => Status::AddressTypeNotSupported,
+            0x01 => Self::GeneralServerFailure,
+            0x02 => Self::ConnectionNotAllowed,
+            0x03 => Self::NetworkUnreachable,
+            0x04 => Self::HostUnreachable,
+            0x05 => Self::ConnectionRefused,
+            0x06 => Self::TtlExpired,
+            0x07 => Self::CommandNotSupported,
+            0x08 => Self::AddressTypeNotSupported,
             _ => return Err(ParsingError::Other),
         })
     }
