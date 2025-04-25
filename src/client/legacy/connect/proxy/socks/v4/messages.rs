@@ -21,7 +21,7 @@ pub struct Request<'a>(pub &'a Address);
 ///             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ///              ignore: only for SOCKSv4 BIND
 #[derive(Debug)]
-pub struct Response(pub Status, pub SocketAddrV4);
+pub struct Response(pub Status);
 
 #[derive(Debug)]
 pub enum Address {
@@ -98,7 +98,7 @@ impl TryFrom<&[u8]> for Response {
 
         let status = buf.get_u8().try_into()?;
 
-        let addr = {
+        let _addr = {
             let port = buf.get_u16();
             let mut ip = [0; 4];
             buf.copy_to_slice(&mut ip);
@@ -106,7 +106,7 @@ impl TryFrom<&[u8]> for Response {
             SocketAddrV4::new(ip.into(), port)
         };
 
-        return Ok(Self(status, addr));
+        return Ok(Self(status));
     }
 }
 
