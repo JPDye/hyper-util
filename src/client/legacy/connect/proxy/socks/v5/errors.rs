@@ -2,6 +2,7 @@ use super::Status;
 
 #[derive(Debug)]
 pub enum SocksV5Error {
+    HostTooLong,
     Auth(AuthError),
     Command(Status),
 }

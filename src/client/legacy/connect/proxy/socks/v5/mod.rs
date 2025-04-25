@@ -62,11 +62,11 @@ impl<C> SocksV5<C> {
     /// Create a new SOCKSv5 handshake service.
     ///
     /// Wraps an underlying connector and stores the address of a tunneling
-    /// proxying servier.
+    /// proxying server.
     ///
     /// A `SocksV5` can then be called with any destination. The `dst` passed to
     /// `call` will not be used to create the underlying connection, but will
-    /// be used in an HTTP CONNECT request sent to the proxy destination.
+    /// be used in a SOCKS handshake with the proxy destination.
     pub fn new(proxy_dst: Uri, connector: C) -> Self {
         Self {
             inner: connector,
@@ -142,7 +142,7 @@ impl SocksConfig {
                     Address::Socket(socket)
                 }
             }
-            Err(_) => return Err(super::SocksError::HostTooLong),
+            Err(_) => return Err(SocksV5Error::HostTooLong.into()),
         };
 
         let method = if self.proxy_auth.is_some() {
@@ -173,14 +173,14 @@ impl SocksConfig {
                 }
 
                 State::ReadingNegRes => {
-                    let res: NegotiationRes = read_message(&mut conn, &mut buf).await?;
+                    let res: NegotiationRes = super::read_message(&mut conn, &mut buf).await?;
 
                     if res.0 == AuthMethod::NoneAcceptable {
-                        return Err(super::SocksError::V5(AuthError::Unsupported.into()));
+                        return Err(SocksV5Error::Auth(AuthError::Unsupported).into());
                     }
 
                     if res.0 != method {
-                        return Err(super::SocksError::V5(AuthError::MethodMismatch.into()));
+                        return Err(SocksV5Error::Auth(AuthError::MethodMismatch).into());
                     }
 
                     if self.optimistic {
@@ -212,10 +212,10 @@ impl SocksConfig {
                 }
 
                 State::ReadingAuthRes => {
-                    let res: AuthenticationRes = read_message(&mut conn, &mut buf).await?;
+                    let res: AuthenticationRes = super::read_message(&mut conn, &mut buf).await?;
 
                     if !res.0 {
-                        return Err(super::SocksError::V5(AuthError::Failed.into()));
+                        return Err(SocksV5Error::Auth(AuthError::Failed).into());
                     }
 
                     state = State::SendingProxyReq;
@@ -234,12 +234,12 @@ impl SocksConfig {
                 }
 
                 State::ReadingProxyRes => {
-                    let res: ProxyRes = read_message(&mut conn, &mut buf).await?;
+                    let res: ProxyRes = super::read_message(&mut conn, &mut buf).await?;
 
                     if res.0 == Status::Success {
                         return Ok(conn);
                     } else {
-                        return Err(super::SocksError::V5(res.0.into()));
+                        return Err(SocksV5Error::Command(res.0).into());
                     }
                 }
             }
@@ -267,11 +267,12 @@ where
         let connecting = self.inner.call(config.proxy.clone());
 
         let fut = async move {
+            let port = dst.port().ok_or(super::SocksError::MissingPort)?.as_u16();
             let host = dst
                 .host()
                 .ok_or(super::SocksError::MissingHost)?
                 .to_string();
-            let port = dst.port().ok_or(super::SocksError::MissingPort)?.as_u16();
+
             let conn = connecting.await.map_err(super::SocksError::Inner)?;
             config.execute(conn, host, port).await
         };
@@ -291,30 +292,5 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.project().fut.poll(cx)
-    }
-}
-
-async fn read_message<T, M, C>(mut conn: &mut T, buf: &mut [u8]) -> Result<M, super::SocksError<C>>
-where
-    T: Read + Unpin,
-    M: for<'a> TryFrom<&'a [u8], Error = super::ParsingError>,
-{
-    let mut n = 0;
-    loop {
-        let read = crate::rt::read(&mut conn, buf).await?;
-
-        if read == 0 {
-            return Err(
-                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected eof").into(),
-            );
-        }
-
-        n += read;
-        match M::try_from(&buf[..n]) {
-            Err(super::ParsingError::Incomplete) => continue,
-            Err(err) => return Err(err.into()),
-
-            Ok(res) => return Ok(res),
-        }
     }
 }

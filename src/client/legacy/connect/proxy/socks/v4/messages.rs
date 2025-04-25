@@ -11,7 +11,7 @@ use std::net::SocketAddrV4;
 ///                                                                ^^^^^^^^^^^^^^^^^^^^^
 ///                                                      optional: only do IP is 0.0.0.X
 #[derive(Debug)]
-pub struct Request<'a>(&'a Address);
+pub struct Request<'a>(pub &'a Address);
 
 /// +-----+-----+----+----+----+----+----+----+
 /// |  VN |  CD | DSTPORT |       DSTIP       |
@@ -21,7 +21,7 @@ pub struct Request<'a>(&'a Address);
 ///             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ///              ignore: only for SOCKSv4 BIND
 #[derive(Debug)]
-pub struct Response(Status, SocketAddrV4);
+pub struct Response(pub Status, pub SocketAddrV4);
 
 #[derive(Debug)]
 pub enum Address {
@@ -29,8 +29,7 @@ pub enum Address {
     Domain(String, u16),
 }
 
-#[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Status {
     Success = 90,
     Failed = 91,
@@ -55,7 +54,7 @@ impl Request<'_> {
                 buf.put_u8(0x00); // USERID
                 buf.put_u8(0x00); // NULL
 
-                Ok(9)
+                Ok(10)
             }
 
             Address::Domain(domain, port) => {
@@ -85,6 +84,10 @@ impl TryFrom<&[u8]> for Response {
     type Error = ParsingError;
 
     fn try_from(mut buf: &[u8]) -> Result<Self, Self::Error> {
+        println!("===");
+        println!("{buf:?}");
+        println!("===");
+
         if buf.remaining() < 8 {
             return Err(ParsingError::Incomplete);
         }
@@ -103,7 +106,7 @@ impl TryFrom<&[u8]> for Response {
             SocketAddrV4::new(ip.into(), port)
         };
 
-        Ok(Self(status, addr))
+        return Ok(Self(status, addr));
     }
 }
 

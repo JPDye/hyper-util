@@ -65,18 +65,17 @@ pub enum Address {
     Domain(String, u16),
 }
 
-#[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Status {
-    Success = 0x00,
-    GeneralServerFailure = 0x01,
-    ConnectionNotAllowed = 0x02,
-    NetworkUnreachable = 0x03,
-    HostUnreachable = 0x04,
-    ConnectionRefused = 0x05,
-    TtlExpired = 0x06,
-    CommandNotSupported = 0x07,
-    AddressTypeNotSupported = 0x08,
+    Success,
+    GeneralServerFailure,
+    ConnectionNotAllowed,
+    NetworkUnreachable,
+    HostUnreachable,
+    ConnectionRefused,
+    TtlExpired,
+    CommandNotSupported,
+    AddressTypeNotSupported,
 }
 
 impl NegotiationReq<'_> {

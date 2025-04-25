@@ -4,6 +4,8 @@ pub use v5::{SocksV5, SocksV5Error};
 mod v4;
 pub use v4::{SocksV4, SocksV4Error};
 
+use hyper::rt::Read;
+
 #[derive(Debug)]
 pub enum SocksError<C> {
     Inner(C),
@@ -12,7 +14,6 @@ pub enum SocksError<C> {
     DnsFailure,
     MissingHost,
     MissingPort,
-    HostTooLong,
 
     V4(SocksV4Error),
     V5(SocksV5Error),
@@ -30,6 +31,30 @@ pub enum ParsingError {
 #[derive(Debug)]
 pub enum SerializeError {
     WouldOverflow,
+}
+
+async fn read_message<T, M, C>(mut conn: &mut T, buf: &mut [u8]) -> Result<M, SocksError<C>>
+where
+    T: Read + Unpin,
+    M: for<'a> TryFrom<&'a [u8], Error = ParsingError>,
+{
+    let mut n = 0;
+    loop {
+        let read = crate::rt::read(&mut conn, buf).await?;
+
+        if read == 0 {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected eof").into(),
+            );
+        }
+
+        n += read;
+        match M::try_from(&buf[..n]) {
+            Err(ParsingError::Incomplete) => continue,
+            Err(err) => return Err(err.into()),
+            Ok(res) => return Ok(res),
+        }
+    }
 }
 
 impl<C> From<std::io::Error> for SocksError<C> {
