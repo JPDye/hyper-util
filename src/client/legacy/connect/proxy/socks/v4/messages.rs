@@ -84,10 +84,6 @@ impl TryFrom<&[u8]> for Response {
     type Error = ParsingError;
 
     fn try_from(mut buf: &[u8]) -> Result<Self, Self::Error> {
-        println!("===");
-        println!("{buf:?}");
-        println!("===");
-
         if buf.remaining() < 8 {
             return Err(ParsingError::Incomplete);
         }
@@ -97,15 +93,6 @@ impl TryFrom<&[u8]> for Response {
         }
 
         let status = buf.get_u8().try_into()?;
-
-        let _addr = {
-            let port = buf.get_u16();
-            let mut ip = [0; 4];
-            buf.copy_to_slice(&mut ip);
-
-            SocketAddrV4::new(ip.into(), port)
-        };
-
         return Ok(Self(status));
     }
 }
