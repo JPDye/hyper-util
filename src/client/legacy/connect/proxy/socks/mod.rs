@@ -4,7 +4,7 @@ pub use v5::{SocksV5, SocksV5Error};
 mod v4;
 pub use v4::{SocksV4, SocksV4Error};
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::BytesMut;
 
 use hyper::rt::Read;
 
