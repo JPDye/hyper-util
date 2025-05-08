@@ -4,8 +4,8 @@ pub use errors::*;
 mod messages;
 use messages::*;
 
-use std::future::Future;
-use std::pin::Pin;
+use std::future::{poll_fn, Future};
+use std::pin::{pin, Pin};
 use std::task::{Context, Poll};
 
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
@@ -34,6 +34,7 @@ pub struct SocksConfig {
     optimistic: bool,
 }
 
+#[derive(Debug)]
 enum State {
     SendingNegReq,
     ReadingNegRes,
@@ -158,13 +159,16 @@ impl SocksConfig {
         let mut state = State::SendingNegReq;
 
         loop {
+            eprintln!("{state:?}");
             match state {
                 State::SendingNegReq => {
                     let req = NegotiationReq(&method);
 
                     let start = send_buf.len();
-                    let n = req.write_to_buf(&mut send_buf)?;
-                    crate::rt::write_all(&mut conn, &send_buf[start..start + n]).await?;
+                    req.write_to_buf(&mut send_buf)?;
+                    println!("{:?}", &send_buf[start..]);
+                    crate::rt::write_all(&mut conn, &send_buf[start..]).await?;
+                    let _ = poll_fn(|cx| pin!(&mut conn).poll_flush(cx)).await;
 
                     if self.optimistic {
                         if method == AuthMethod::UserPass {
@@ -178,6 +182,9 @@ impl SocksConfig {
                 }
 
                 State::ReadingNegRes => {
+                    let res = poll_fn(|cx| pin!(&mut conn).poll_flush(cx)).await;
+                    println!("==> {res:?}");
+
                     let res: NegotiationRes = super::read_message(&mut conn, &mut recv_buf).await?;
 
                     if res.0 == AuthMethod::NoneAcceptable {
@@ -208,8 +215,10 @@ impl SocksConfig {
                     let req = AuthenticationReq(&user, &pass);
 
                     let start = send_buf.len();
-                    let n = req.write_to_buf(&mut send_buf)?;
-                    crate::rt::write_all(&mut conn, &send_buf[start..start + n]).await?;
+                    req.write_to_buf(&mut send_buf)?;
+                    println!("{:?}", &send_buf[start..]);
+                    crate::rt::write_all(&mut conn, &send_buf[start..]).await?;
+                    let _ = poll_fn(|cx| pin!(&mut conn).poll_flush(cx)).await;
 
                     if self.optimistic {
                         state = State::SendingProxyReq;
@@ -233,8 +242,10 @@ impl SocksConfig {
                     let req = ProxyReq(&address);
 
                     let start = send_buf.len();
-                    let n = req.write_to_buf(&mut send_buf)?;
-                    crate::rt::write_all(&mut conn, &send_buf[start..start + n]).await?;
+                    req.write_to_buf(&mut send_buf)?;
+                    println!("{:?}", &send_buf[start..]);
+                    crate::rt::write_all(&mut conn, &send_buf[start..]).await?;
+                    let _ = poll_fn(|cx| pin!(&mut conn).poll_flush(cx)).await;
 
                     if self.optimistic {
                         state = State::ReadingNegRes;
